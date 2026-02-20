@@ -1,20 +1,41 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-// Basic Authentication Middleware
-// Protects the entire Mission Control dashboard
+// Basic Authentication Middleware with Cookie Session
+
+const AUTH_COOKIE = 'mission_control_auth'
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
 
 export function middleware(request: NextRequest) {
-  // Skip auth for health check (Render needs this)
-  if (request.nextUrl.pathname === '/api/health') {
+  const { pathname } = request.nextUrl
+
+  // Skip auth for health check and static assets
+  if (
+    pathname === '/api/health' ||
+    pathname.startsWith('/_next/') ||
+    pathname.startsWith('/favicon') ||
+    pathname.startsWith('/images/') ||
+    pathname.endsWith('.css') ||
+    pathname.endsWith('.js') ||
+    pathname.endsWith('.png') ||
+    pathname.endsWith('.jpg') ||
+    pathname.endsWith('.ico')
+  ) {
     return NextResponse.next()
   }
 
-  // Get credentials from environment or use defaults
+  // Get credentials from environment
   const validUser = process.env.AUTH_USER || 'admin'
   const validPass = process.env.AUTH_PASS || 'mission2026'
+  const validToken = Buffer.from(`${validUser}:${validPass}`).toString('base64')
 
-  // Check for authorization header
+  // Check for auth cookie first
+  const authCookie = request.cookies.get(AUTH_COOKIE)?.value
+  if (authCookie === validToken) {
+    return NextResponse.next()
+  }
+
+  // Check authorization header
   const authHeader = request.headers.get('authorization')
   
   if (!authHeader || !authHeader.startsWith('Basic ')) {
@@ -27,7 +48,7 @@ export function middleware(request: NextRequest) {
     })
   }
 
-  // Decode and validate credentials
+  // Validate credentials
   try {
     const base64Credentials = authHeader.split(' ')[1]
     const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8')
@@ -42,23 +63,33 @@ export function middleware(request: NextRequest) {
         },
       })
     }
+
+    // Set auth cookie for future requests
+    const response = NextResponse.next()
+    response.cookies.set({
+      name: AUTH_COOKIE,
+      value: validToken,
+      maxAge: COOKIE_MAX_AGE,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/',
+    })
+
+    return response
   } catch {
-    return new NextResponse('Invalid Authorization Header', {
+    return new NextResponse('Invalid Authorization', {
       status: 401,
       headers: {
         'WWW-Authenticate': 'Basic realm="Mission Control"',
       },
     })
   }
-
-  return NextResponse.next()
 }
 
 // Match all paths except static assets
 export const config = {
   matcher: [
-    '/',
-    '/api/:path*',
     '/((?!_next/static|_next/image|favicon.ico).*)',
   ],
 }
